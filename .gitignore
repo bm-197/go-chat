@@ -1,0 +1,74 @@
+# Go specific
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+go.work
+
+# Output directories
+bin/
+dist/
+
+# Go workspace file
+go.work
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool
+*.out
+
+# Dependency directories
+vendor/
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# IDE specific files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS specific files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Docker
+.docker/
+docker-compose.override.yml
+
+# Redis
+*.rdb
+dump.rdb
+
+# Logs
+*.log
+logs/
+
+# Binary files
+main
+go-chat
+
+# Air - Live reload
+tmp/
+
+# Debug files
+__debug_bin
+debug.test
+
+# Project specific
+redis_data/
+
+test_websocket.py

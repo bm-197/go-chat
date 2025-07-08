@@ -1,0 +1,37 @@
+services:
+  app:
+    build:
+      context: .
+      target: ${GO_ENV:-development}
+    volumes:
+      - .:/app
+    ports:
+      - "${APP_PORT:-5000}:5000"
+    environment:
+      - REDIS_HOST=${REDIS_HOST}
+      - REDIS_PORT=${REDIS_PORT}
+      - JWT_SECRET=${JWT_SECRET}
+      - GO_ENV=${GO_ENV}
+    env_file:
+      - .env
+    depends_on:
+      - redis_host
+
+  redis_host:
+    image: redis:7-alpine
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    environment:
+      - REDIS_HOSTS=local:${REDIS_HOST}:${REDIS_PORT}
+    ports:
+      - "${REDIS_COMMANDER_PORT:-8081}:8081"
+    depends_on:
+      - redis_host
+
+volumes:
+  redis_data: 
