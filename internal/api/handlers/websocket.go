@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"slices"
 	"sync"
 	"time"
 
@@ -62,12 +63,12 @@ func (h *WebSocketHandler) HandleWebSocket(c echo.Context) error {
 	h.clients[userID] = ws
 	h.clientsMux.Unlock()
 
-	defer func() {
-		h.clientsMux.Lock()
-		delete(h.clients, userID)
-		h.clientsMux.Unlock()
-	}()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
+	go h.listenPubSub(ctx, userID, ws)
+
+	// Reads messages coming from the websocket client
 	for {
 		_, msgBytes, err := ws.ReadMessage()
 		if err != nil {
@@ -112,7 +113,53 @@ func (h *WebSocketHandler) HandleWebSocket(c echo.Context) error {
 		}
 	}
 
+	h.clientsMux.Lock()
+	delete(h.clients, userID)
+	h.clientsMux.Unlock()
+
 	return nil
+}
+
+func (h *WebSocketHandler) listenPubSub(ctx context.Context, userID string, ws *websocket.Conn) {
+	groups, err := h.store.GetUserGroups(ctx, userID)
+	if err != nil {
+		log.Printf("failed to fetch user groups for subscriptions: %v", err)
+	}
+
+	channels := []string{
+		"broadcast",
+		fmt.Sprintf("user:%s", userID),
+	}
+
+	for _, g := range groups {
+		channels = append(channels, fmt.Sprintf("group:%s", g.ID))
+	}
+
+	pubsub := h.store.Subscribe(ctx, channels...)
+
+	defer pubsub.Close()
+
+	var writeMu sync.Mutex
+
+	ch := pubsub.Channel()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case msg, ok := <-ch:
+			if !ok {
+				return
+			}
+
+			writeMu.Lock()
+			if err := ws.WriteMessage(websocket.TextMessage, []byte(msg.Payload)); err != nil {
+				writeMu.Unlock()
+				log.Printf("failed to write websocket message: %v", err)
+				return
+			}
+			writeMu.Unlock()
+		}
+	}
 }
 
 func (h *WebSocketHandler) handlePrivateMessage(msg Message) error {
@@ -133,19 +180,8 @@ func (h *WebSocketHandler) handlePrivateMessage(msg Message) error {
 		return fmt.Errorf("failed to save message: %w", err)
 	}
 
-	h.clientsMux.RLock()
-	recipientWS, ok := h.clients[recipient.ID]
-	h.clientsMux.RUnlock()
-
-	if ok {
-		msgBytes, err := json.Marshal(msg)
-		if err != nil {
-			return fmt.Errorf("failed to marshal message: %w", err)
-		}
-
-		if err := recipientWS.WriteMessage(websocket.TextMessage, msgBytes); err != nil {
-			return fmt.Errorf("failed to send message: %w", err)
-		}
+	if err := h.store.PublishMessage(context.Background(), message); err != nil {
+		log.Printf("failed to publish private message: %v", err)
 	}
 
 	return nil
@@ -157,13 +193,7 @@ func (h *WebSocketHandler) handleGroupMessage(msg Message) error {
 		return fmt.Errorf("failed to get group: %w", err)
 	}
 
-	isMember := false
-	for _, memberID := range group.Members {
-		if memberID == msg.From {
-			isMember = true
-			break
-		}
-	}
+	isMember := slices.Contains(group.Members, msg.From)
 
 	if !isMember {
 		return fmt.Errorf("user is not a member of the group")
@@ -180,21 +210,9 @@ func (h *WebSocketHandler) handleGroupMessage(msg Message) error {
 	if err := h.store.SaveMessage(context.Background(), message); err != nil {
 		return fmt.Errorf("failed to save message: %w", err)
 	}
-
-	msgBytes, err := json.Marshal(msg)
-	if err != nil {
-		return fmt.Errorf("failed to marshal message: %w", err)
+	if err := h.store.PublishMessage(context.Background(), message); err != nil {
+		log.Printf("failed to publish group message: %v", err)
 	}
-
-	h.clientsMux.RLock()
-	for _, memberID := range group.Members {
-		if ws, ok := h.clients[memberID]; ok {
-			if err := ws.WriteMessage(websocket.TextMessage, msgBytes); err != nil {
-				log.Printf("failed to send message to member %s: %v", memberID, err)
-			}
-		}
-	}
-	h.clientsMux.RUnlock()
 
 	return nil
 }
@@ -210,19 +228,9 @@ func (h *WebSocketHandler) handleBroadcast(msg Message) error {
 	if err := h.store.SaveMessage(context.Background(), message); err != nil {
 		return fmt.Errorf("failed to save message: %w", err)
 	}
-
-	msgBytes, err := json.Marshal(msg)
-	if err != nil {
-		return fmt.Errorf("failed to marshal message: %w", err)
+	if err := h.store.PublishMessage(context.Background(), message); err != nil {
+		log.Printf("failed to publish broadcast message: %v", err)
 	}
-
-	h.clientsMux.RLock()
-	for _, ws := range h.clients {
-		if err := ws.WriteMessage(websocket.TextMessage, msgBytes); err != nil {
-			log.Printf("failed to send broadcast message: %v", err)
-		}
-	}
-	h.clientsMux.RUnlock()
 
 	return nil
 }

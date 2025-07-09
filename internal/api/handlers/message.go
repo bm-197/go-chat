@@ -72,6 +72,11 @@ func (h *MessageHandler) SendMessage(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to save message")
 	}
 
+	// Publish the message to Redis so that all websocket nodes can forward it to
+	// connected clients. I intentionally ignored publish errors for now because
+	// the message has already been persisted; the sender can retry fetch if needed.
+	_ = h.store.PublishMessage(c.Request().Context(), msg)
+
 	return c.JSON(http.StatusCreated, msg)
 }
 
